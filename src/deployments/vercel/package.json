@@ -1,0 +1,21 @@
+{
+  "name": "obsidian-web-vercel",
+  "version": "0.1.0",
+  "license": "GPL-3.0-only",
+  "description": "Vercel deployment for obsidian-web: static app + /sync/v1 functions backed by Neon Postgres",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node scripts/build-assets.js",
+    "migrate": "node scripts/migrate.js",
+    "dev": "node scripts/dev.js",
+    "start": "node scripts/dev.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}
