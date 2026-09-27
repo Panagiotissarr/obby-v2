@@ -157,7 +157,11 @@ this config exists — no config means no buttons and no network at all):
   and resolved by the next Pull.
 - **Pull** (cloud-download) — download server changes, resolve conflicts
   (server wins at the original path, local content preserved as a
-  `name.conflict-<stamp>.ext` copy) and conform local deletions.
+  `name.conflict-<stamp>.ext` copy) and conform local deletions. Prompts
+  first ("the page will refresh after pulling"), then reloads the page on
+  success — the sync writes OPFS outside Obsidian's adapter, so the file
+  explorer only shows pulled notes after a reload. Push never touches local
+  files and never reloads.
 
 Every click shows exactly one Notice with the result (or the failure's own
 message for 10 s); each request times out after 30 s so a stalled connection

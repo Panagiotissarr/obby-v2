@@ -1555,6 +1555,15 @@ const MOBILE_SCRIPTS = [
         notify('סנכרון כבר פעיל — נסה בעוד רגע'); // busy-skip used to be SILENT
         return;
       }
+      // Pull writes into OPFS from outside Obsidian's own adapter, so the
+      // explorer only picks the new notes up on a full page load — hence the
+      // pre-sync warning (requested): tell the user the page will refresh,
+      // then reload right after a successful pull.
+      if (mode === 'pull' && !window.confirm(
+        'The page will refresh after pulling so the new notes appear.\n' +
+        'הדף י רענן אחרי המשיכה כדי שההערות המעודכנות יוצגו. להמשיך?')) {
+        return; // declined — no sync, no spinner, no reload
+      }
       running = true;
       setSpin(true);
       var p;
@@ -1576,7 +1585,12 @@ const MOBILE_SCRIPTS = [
             notify(msg + (r.pushSupported === false ? ' · השרת תומך במשיכה בלבד' : ''));
           } else {
             notify('נמשך: ' + (r.downloaded || 0) + ' הורדו' +
-              (r.conflicts ? ', ' + r.conflicts + ' קונפליקטים' : ''));
+              (r.conflicts ? ', ' + r.conflicts + ' קונפליקטים' : '') +
+              ' — מרענן את הדף…', 8000);
+            // As promised in the confirm() above: reload so the explorer
+            // re-reads OPFS and the pulled notes appear immediately.
+            // (Failure paths never reach here — no reload on error.)
+            setTimeout(function () { window.location.reload(); }, 1500);
           }
           console.log('[ow-sync] mode=' + mode, r);
         })
