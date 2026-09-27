@@ -1550,11 +1550,27 @@ const MOBILE_SCRIPTS = [
     }
 
     var running = false;
-    function doSync(mode) {
-      if (running) {
-        notify('Sync already running — try again in a moment'); // busy-skip used to be SILENT
-        return;
+    // While a sync runs: spinner ON + buttons disabled (no clicks, no error
+    // toast — the spin is the feedback; "sync already running" on a
+    // double-click read as a random failure).
+    function setBusy(on) {
+      running = on;
+      setSpin(on);
+      var btns = document.querySelectorAll('.ow-sync-now-btn');
+      for (var i = 0; i < btns.length; i++) {
+        if (on) {
+          btns[i].classList.add('is-disabled');
+          btns[i].style.opacity = '0.5';
+          btns[i].style.pointerEvents = 'none';
+        } else {
+          btns[i].classList.remove('is-disabled');
+          btns[i].style.opacity = '';
+          btns[i].style.pointerEvents = '';
+        }
       }
+    }
+    function doSync(mode) {
+      if (running) return; // buttons are disabled while running; belt-and-suspenders
       // Pull writes into OPFS from outside Obsidian's own adapter, so the
       // explorer only picks the new notes up on a full page load — hence the
       // pre-sync warning (requested): tell the user the page will refresh,
@@ -1564,7 +1580,7 @@ const MOBILE_SCRIPTS = [
         return; // declined — no sync, no spinner, no reload
       }
       running = true;
-      setSpin(true);
+      setBusy(true);
       var p;
       try {
         p = runner.run(VAULT_ID, cfg, mode); // 'pull' | 'push'
@@ -1574,7 +1590,9 @@ const MOBILE_SCRIPTS = [
       Promise.resolve(p)
         .then(function (r) {
           if (!r || r.skipped) {
-            notify('Sync already running — try again in a moment', 8000);
+            // Only reachable if the runner's mutex is stuck (previous run
+            // never finished) — say what to DO instead of "try again".
+            notify("The previous sync hasn't finished — if the spinner never stops, reload the page.", 8000);
             return;
           }
           if (mode === 'push') {
@@ -1600,7 +1618,7 @@ const MOBILE_SCRIPTS = [
           notify('Sync (' + (mode === 'push' ? 'push' : 'pull') + ') failed: ' +
             ((e && e.message) || e), 10000);
         })
-        .then(function () { running = false; setSpin(false); });
+        .then(function () { setBusy(false); });
     }
 
     function mountSyncButtons() {
@@ -1632,6 +1650,9 @@ const MOBILE_SCRIPTS = [
           })(defs[d]);
         }
       }
+      // A remount while a sync runs (layout-change) must inherit the
+      // disabled+spinning state instead of coming back clickable.
+      if (running) setBusy(true);
     }
 
     // same App.onload race guard as installFolderRefreshWatch above
