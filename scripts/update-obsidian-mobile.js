@@ -51,6 +51,11 @@ const EXTRACT_MAP = {
 const EXTRACT_DIRS = [
   { apk: 'assets/public/i18n/', target: 'i18n/' },
   { apk: 'assets/public/lib/',  target: 'lib/'  },
+  // app.css @font-face refs `public/fonts/*.woff2|ttf` relative to itself
+  // (served at /obsidian-mobile/app.css), so the target keeps the `public/`
+  // segment: the APK nests them under assets/public/public/fonts/. Without
+  // this dir the site 404s 7 fonts on every boot.
+  { apk: 'assets/public/public/fonts/', target: 'public/fonts/' },
 ];
 
 const REQUIRED_FILES = ['app.js', 'native-bridge.js', 'worker.js'];

@@ -591,6 +591,26 @@ const MOBILE_SCRIPTS = [
     obs.observe(document.body, { childList: true, subtree: true });
   }
 
+  // ── Console hygiene: phone-home network noise ────────────────────────────
+  // Obsidian's bundle phones home at boot (update/stats endpoints such as
+  // releases.obsidian.md, which serves no CORS headers — verified). When the
+  // browser blocks one of those XHRs, the rejection is a stack-less native
+  // `NetworkError: A network error occurred.` DOMException that the bundle
+  // never catches, so DevTools prints it as an uncaught error on every load
+  // (8× a boot) and users read it as "sync is broken". It can't be fixed at
+  // the source (third-party headers / no catch inside the minified bundle),
+  // and the bundle ignores it too — so we only take it off the console,
+  // exactly-matched, keeping it as console.debug for anyone debugging.
+  // Our own sync/fetch code always catches and toasts its errors
+  // ([ow-sync] …) — it never reaches this listener.
+  window.addEventListener('unhandledrejection', function (ev) {
+    var r = ev.reason;
+    if (r && r.name === 'NetworkError' && r.message === 'A network error occurred.') {
+      console.debug('[ow] suppressed phone-home network rejection:', r);
+      ev.preventDefault();
+    }
+  });
+
   // ── App-ready poll — helper רב-שימושי (docs/plans/vault-name-display.md §3) ─
   // אין ב-boot.js נקודת-ready אמינה מובנית (s.onload רק סופר scripts
   // שהורדו — לא app-init; אין onLayoutReady/setInterval/waitFor* קיים). ה-vendor

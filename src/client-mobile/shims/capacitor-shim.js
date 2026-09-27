@@ -875,6 +875,13 @@
     setScroll: noop,
     setResizeMode: noop,
     getResizeMode: () => Promise.resolve({ mode: 'none' }),
+    // app.js awaits this on android (`Keyboard.hasPhysicalKeyboard()`); an
+    // unimplemented method throws "… is not implemented on android" as an
+    // uncaught promise rejection on every boot. Browser guess: a fine primary
+    // pointer ≈ mouse/keyboard, coarse ≈ touch-only device.
+    hasPhysicalKeyboard: () => Promise.resolve(
+      !!(window.matchMedia && window.matchMedia('(pointer: fine)').matches),
+    ),
   };
 
   const KeepAwake = {
