@@ -1483,36 +1483,57 @@ const MOBILE_SCRIPTS = [
     });
   }
 
-  // ── pull-sync "Sync now" trigger (the pull-sync brief
-  // §2/§3ד, pattern reused from installFolderRefreshWatch's manual-refresh
-  // button above) ─────────────────────────────────────────────────────────
+  // ── sync toolbar: PUSH + PULL buttons (was a single "Sync now" button;
+  // the pull-sync brief §2/§3ד, pattern reused from installFolderRefreshWatch's
+  // manual-refresh button above) ────────────────────────────────────────────
   // v1 = OPFS-local vaults only (brief §3א round-3 finding — the sync
   // engine's default OPFS root resolution only matches 'local' vaults'
   // layout). This VAULT_TYPE check is the ONE guard point run-pull.js
   // itself relies on (it never re-checks __owVaultType). A vault with no
   // stored `ow-sync:<id>` config (brief §3ה — v1 has no settings-UI, set
-  // via localStorage directly) never gets a button, never touches the
+  // via localStorage directly) never gets buttons, never touches the
   // network, never hashes anything (brief §5 DoD#6).
+  //
+  // Each button runs its own mode against the SAME runner:
+  //   Pull → run(vaultId, cfg, 'pull')  downloads + conforms + resolves
+  //          conflicts (server wins; local content preserved as a copy)
+  //   Push → run(vaultId, cfg, 'push')  uploads + commits only; never
+  //          rewrites or deletes a local file
+  // Feedback rules (why the old single button "did nothing"): every click
+  // produces EXACTLY ONE visible Notice — success counts, busy-skip, or the
+  // failure's own message (shown 10s) — and the spinner is cleared through a
+  // try/catch-wrapped promise chain, so even a synchronous throw can't leave
+  // a button spinning. remote-client.js additionally times every request out
+  // after 30s (ETIMEOUT), so a stalled network can't spin forever either.
   function installSyncNowTrigger() {
     if (VAULT_TYPE !== 'local') return;
     // Bidirectional runner when its script is present (sync/run-sync.js —
     // pushes local changes too); pull-only run-pull.js stays as the fallback
-    // for deployments that ship without it. Both expose the same entry shape.
+    // for deployments that ship without it. Both expose the same entry shape;
+    // run-pull ignores the (unimplemented) 'push' mode, so Push only renders
+    // when the bidirectional runner is actually loaded.
     var runner = window.__owSyncRunSync || window.__owSyncRunPull;
     if (!runner) return;
     var cfg = runner.getSyncConfig(VAULT_ID);
-    if (!cfg) return; // guard — no config → no button, no network (DoD#6)
+    if (!cfg) return; // guard — no config → no buttons, no network (DoD#6)
+    var hasPush = !!window.__owSyncRunSync;
 
-    // lucide "cloud-download" path data (stable across lucide releases —
-    // unlike the refresh icon, this one wasn't grepped from this bundle's
-    // app.js because it isn't a pre-existing bundle icon; inline SVG doesn't
-    // depend on the bundle's icon table either way, brief §3ו / folder-
-    // refresh-toolbar §0.1ג precedent: window.setIcon isn't exposed here).
-    var OW_SYNC_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ' +
+    // lucide "cloud-download"/"cloud-upload" path data (stable across lucide
+    // releases — unlike the refresh icon, these weren't grepped from this
+    // bundle's app.js because they aren't pre-existing bundle icons; inline
+    // SVG doesn't depend on the bundle's icon table either way, brief §3ו /
+    // folder-refresh-toolbar §0.1ג precedent: window.setIcon isn't exposed
+    // here).
+    var OW_PULL_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ' +
       'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
       'stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-cloud-download">' +
       '<path d="M12 13v8"></path><path d="m8 17 4 4 4-4"></path>' +
       '<path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"></path></svg>';
+    var OW_PUSH_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" ' +
+      'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-cloud-upload">' +
+      '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>' +
+      '<path d="M12 12v9"></path><path d="m16 16-4-4-4 4"></path></svg>';
 
     function setSpin(on) {
       var btns = document.querySelectorAll('.ow-sync-now-btn');
@@ -1522,55 +1543,81 @@ const MOBILE_SCRIPTS = [
       }
     }
 
+    // One visible message per event, always. Notice(message, durationMs).
+    function notify(msg, ms) {
+      if (typeof window.Notice === 'function') new window.Notice(msg, ms || 5000);
+      else console.log('[ow-sync] ' + msg);
+    }
+
     var running = false;
-    function doSync() {
-      if (running) return; // UI-level debounce; runner's own syncStatus mutex
-                            // (brief §3ד) is the real guard — this just avoids
-                            // spamming console/spin state.
+    function doSync(mode) {
+      if (running) {
+        notify('סנכרון כבר פעיל — נסה בעוד רגע'); // busy-skip used to be SILENT
+        return;
+      }
       running = true;
       setSpin(true);
-      runner.run(VAULT_ID, cfg)
+      var p;
+      try {
+        p = runner.run(VAULT_ID, cfg, mode); // 'pull' | 'push'
+      } catch (e) {
+        p = Promise.reject(e); // sync throw must not leave the spinner on
+      }
+      Promise.resolve(p)
         .then(function (r) {
-          if (r && r.skipped) {
-            console.log('[ow-sync] busy — sync already running');
+          if (!r || r.skipped) {
+            notify('סנכרון כבר פעיל — נסה שוב בעוד רגע', 8000);
             return;
           }
-          var pushed = r.pushed || 0;
-          var deleted = r.deleted || 0;
-          console.log('[ow-sync] ' + r.downloaded + ' downloaded, ' + pushed +
-            ' pushed, ' + deleted + ' deleted, ' + r.skipped + ' skipped, ' +
-            r.conflicts + ' conflicts' +
-            (r.pushSupported === false ? ' (pull-only server — nothing sent)' : ''));
-          if (typeof window.Notice === 'function') {
-            new window.Notice(r.downloaded + ' הורדו, ' + pushed + ' נשלחו, ' + r.conflicts + ' קונפליקטים');
+          if (mode === 'push') {
+            var msg = 'נשלח: ' + (r.pushed || 0) + ' קבצים';
+            if (r.deleted) msg += ', ' + r.deleted + ' נמחקו';
+            if (r.conflicts) msg += ', ' + r.conflicts + ' קונפליקטים (יסודרו במשיכה)';
+            notify(msg + (r.pushSupported === false ? ' · השרת תומך במשיכה בלבד' : ''));
+          } else {
+            notify('נמשך: ' + (r.downloaded || 0) + ' הורדו' +
+              (r.conflicts ? ', ' + r.conflicts + ' קונפליקטים' : ''));
           }
+          console.log('[ow-sync] mode=' + mode, r);
         })
         .catch(function (e) {
-          console.warn('[ow-sync] sync failed', e);
-          if (typeof window.Notice === 'function') {
-            // 401 → explicit message, no retry-loop (brief §3ה).
-            new window.Notice((e && e.code === 'EAUTH') ? 'סנכרון: אימות נכשל' : 'סנכרון נכשל');
-          }
+          console.warn('[ow-sync] sync failed (' + mode + '):', e);
+          // The runner's own error text (HTTP status, 401, timeout…) — the
+          // old generic 'סנכרון נכשל' hid WHY, which read as "does nothing".
+          notify('סנכרון (' + (mode === 'push' ? 'שליחה' : 'משיכה') + ') נכשל: ' +
+            ((e && e.message) || e), 10000);
         })
         .then(function () { running = false; setSpin(false); });
     }
 
-    function mountSyncButton() {
+    function mountSyncButtons() {
       var bars = document.querySelectorAll(
         '.workspace-leaf-content[data-type="file-explorer"] .nav-buttons-container');
       for (var i = 0; i < bars.length; i++) {
         var bar = bars[i];
-        if (bar.querySelector('.ow-sync-now-btn')) continue;   // dedupe
-        var btn = document.createElement('div');   // nav-action-button is a div in this bundle
-        btn.className = 'clickable-icon nav-action-button ow-sync-now-btn';
-        btn.setAttribute('aria-label', 'Sync now — משוך שינויים מהשרת');
-        btn.innerHTML = OW_SYNC_SVG;
-        btn.addEventListener('click', function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          doSync();
-        });
-        bar.appendChild(btn);
+        if (bar.querySelector('.ow-sync-pull-btn')) continue;   // dedupe
+        var defs = [
+          { cls: 'ow-sync-pull-btn', svg: OW_PULL_SVG,
+            label: 'Pull from server — משוך שינויים מהשרת', mode: 'pull' },
+        ];
+        if (hasPush) {
+          defs.unshift({ cls: 'ow-sync-push-btn', svg: OW_PUSH_SVG,
+            label: 'Push to server — שלח שינויים לשרת', mode: 'push' });
+        }
+        for (var d = 0; d < defs.length; d++) {
+          (function (def) {
+            var btn = document.createElement('div'); // nav-action-button is a div in this bundle
+            btn.className = 'clickable-icon nav-action-button ow-sync-now-btn ' + def.cls;
+            btn.setAttribute('aria-label', def.label);
+            btn.innerHTML = def.svg;
+            btn.addEventListener('click', function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              doSync(def.mode);
+            });
+            bar.appendChild(btn);
+          })(defs[d]);
+        }
       }
     }
 
@@ -1579,8 +1626,8 @@ const MOBILE_SCRIPTS = [
     owWhenAppReady(function (app) {
       function whenWorkspaceReady(tries) {
         if (app.workspace) {
-          mountSyncButton();
-          app.workspace.on('layout-change', mountSyncButton);
+          mountSyncButtons();
+          app.workspace.on('layout-change', mountSyncButtons);
           return;
         }
         if ((tries || 0) >= 160) return;

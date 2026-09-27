@@ -77,6 +77,26 @@
   var UPLOAD_CHUNK = 2 * 1024 * 1024;
   var COMMIT_MAX_OPS = 1000; // client batch size, well under the server's 3000
 
+  // Every request carries a 30s deadline: a stalled connection (cold Vercel
+  // function, dead network) must fail loudly instead of leaving the sync
+  // spinner turning forever. AbortSignal.timeout is widely available; where
+  // it isn't, fetch proceeds unbounded (status quo) rather than break.
+  var REQ_TIMEOUT_MS = 30000;
+  function fetchReq(url, opts) {
+    if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+      opts = opts || {};
+      if (!opts.signal) opts.signal = AbortSignal.timeout(REQ_TIMEOUT_MS);
+    }
+    return fetch(url, opts).catch(function (e) {
+      if (e && (e.name === 'AbortError' || e.code === 20)) {
+        var t = new Error('request timed out after ' + Math.round(REQ_TIMEOUT_MS / 1000) + 's');
+        t.code = 'ETIMEOUT';
+        throw t;
+      }
+      throw e;
+    });
+  }
+
   // baseUrl + token (+ optional vault) — per-vault config (brief §3ה,
   // `localStorage['ow-sync:'+vaultId]`).
   function RemoteClient(opts) {
@@ -113,7 +133,7 @@
     // server state, never a browser-cached one (unlike blob(), below, whose
     // URLs are content-addressed and safe to let the browser cache).
     async function manifest(after) {
-      var res = await fetch(manifestUrl(after || ''), { headers: authHeaders(), cache: 'no-store' });
+      var res = await fetchReq(manifestUrl(after || ''), { headers: authHeaders(), cache: 'no-store' });
       if (res.status === 401) throw authError('sync manifest: authentication failed (401)');
       if (!res.ok) throw new Error('sync manifest: HTTP ' + res.status);
       return res.json();
@@ -140,7 +160,7 @@
     }
 
     async function blobResponse(url) {
-      var res = await fetch(url, { headers: authHeaders() });
+      var res = await fetchReq(url, { headers: authHeaders() });
       if (res.status === 401) throw authError('sync blob: authentication failed (401)');
       return res;
     }
@@ -197,7 +217,7 @@
       for (var i = 0; i < total; i++) {
         var start = i * UPLOAD_CHUNK;
         var slice = u8.subarray(start, Math.min(u8.length, start + UPLOAD_CHUNK));
-        var res = await fetch(blobUrl(hash), {
+        var res = await fetchReq(blobUrl(hash), {
           method: 'PUT',
           headers: authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
@@ -220,7 +240,7 @@
 
     // POST /sync/v1/blobs/missing {hashes} → [hash…] the server lacks.
     async function missingBlobs(hashes) {
-      var res = await fetch(joinUrl(baseUrl, '/sync/v1/blobs/missing') + (vault ? '?vault=' + encodeURIComponent(vault) : ''), {
+      var res = await fetchReq(joinUrl(baseUrl, '/sync/v1/blobs/missing') + (vault ? '?vault=' + encodeURIComponent(vault) : ''), {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ hashes: hashes }),
@@ -239,7 +259,7 @@
     // 422 → EMISSING with `.hashes` (those blobs vanished server-side;
     // upload them and retry). 501/404 → EPUSH (pull-only server).
     async function commit(changes, deletions) {
-      var res = await fetch(joinUrl(baseUrl, '/sync/v1/commit') + (vault ? '?vault=' + encodeURIComponent(vault) : ''), {
+      var res = await fetchReq(joinUrl(baseUrl, '/sync/v1/commit') + (vault ? '?vault=' + encodeURIComponent(vault) : ''), {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ changes: changes || [], deletions: deletions || [] }),

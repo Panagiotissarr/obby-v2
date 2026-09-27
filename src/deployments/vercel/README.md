@@ -149,11 +149,21 @@ localStorage.setItem('ow-sync:<vaultId>', JSON.stringify({
 }));
 ```
 
-A button appears in the file explorer (local OPFS vaults only, only when this
-config exists — no config means no button and no network at all). Clicking it
-runs the full pull → conflict → push cycle. Every device using the same
-`vault` value shares one server-side vault; the local `<vaultId>`s don't have
-to match each other.
+Two buttons appear in the file explorer (local OPFS vaults only, only when
+this config exists — no config means no buttons and no network at all):
+
+- **Push** (cloud-upload) — upload local changes and commit them (`baseHash`
+  CAS); never rewrites or deletes a local file. CAS conflicts are reported
+  and resolved by the next Pull.
+- **Pull** (cloud-download) — download server changes, resolve conflicts
+  (server wins at the original path, local content preserved as a
+  `name.conflict-<stamp>.ext` copy) and conform local deletions.
+
+Every click shows exactly one Notice with the result (or the failure's own
+message for 10 s); each request times out after 30 s so a stalled connection
+can never leave the spinner running. Every device using the same `vault`
+value shares one server-side vault; the local `<vaultId>`s don't have to
+match each other.
 
 ## Scripts
 

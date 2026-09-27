@@ -29,10 +29,23 @@
  * `{baseUrl, token, vault?}` — `vault` scopes the server query; unset → the
  * server's default vault. No config → boot.js never shows the button.
  *
+ * Modes — `run(vaultId, cfg, mode)`:
+ *   'both' (default)  the full cycle above (what the old single button ran)
+ *   'pull'            downloads + bookkeeping + local conforms + conflict
+ *                     resolution only; nothing is uploaded (push phase skipped)
+ *   'push'            uploads + commits only: no downloads, no local deletes,
+ *                     no conflict resolution — a CAS conflict is reported in
+ *                     `summary.conflicts` and left for the next pull (its
+ *                     local content is untouched, S unchanged → still latent)
+ *
  * Browser-only — window-attached IIFE, no module system. Style: no `?.`/`??`.
  */
 (function () {
   'use strict';
+
+  function normalizeMode(mode) {
+    return (mode === 'pull' || mode === 'push') ? mode : 'both';
+  }
 
   function configKeyFor(vaultId) { return 'ow-sync:' + vaultId; }
 
@@ -256,8 +269,11 @@
     return null;
   }
 
-  async function runSync(vaultId, cfg) {
+  async function runSync(vaultId, cfg, mode) {
     if (syncStatus !== 'idle') return { skipped: true, reason: 'busy' };
+    var m = normalizeMode(mode);
+    var doPull = m !== 'push';
+    var doPush = m !== 'pull';
 
     syncStatus = 'listing';
     try {
@@ -300,12 +316,14 @@
 
       // ── pull ────────────────────────────────────────────────────────────
       syncStatus = 'downloading';
-      for (var i = 0; i < plan.downloads.length; i++) {
-        var dl = plan.downloads[i];
-        var buf = await remote.blob(dl.hash);
-        await store.writeFile({ path: dl.path, data: toBase64(buf) });
-        await hashStore.upsert(dl.path, dl.hash);
-        ctx.summary.downloaded++;
+      if (doPull) {
+        for (var i = 0; i < plan.downloads.length; i++) {
+          var dl = plan.downloads[i];
+          var buf = await remote.blob(dl.hash);
+          await store.writeFile({ path: dl.path, data: toBase64(buf) });
+          await hashStore.upsert(dl.path, dl.hash);
+          ctx.summary.downloaded++;
+        }
       }
 
       // bookkeeping — no network needed
@@ -315,43 +333,58 @@
       for (var fs = 0; fs < plan.forgetSynced.length; fs++) {
         await hashStore.remove(plan.forgetSynced[fs]);
       }
-      for (var ld = 0; ld < plan.localDeletes.length; ld++) {
-        try {
-          await store.deleteFile({ path: plan.localDeletes[ld] });
-        } catch (_) { /* already gone */ }
-        await hashStore.remove(plan.localDeletes[ld]);
+      if (doPull) {
+        for (var ld = 0; ld < plan.localDeletes.length; ld++) {
+          try {
+            await store.deleteFile({ path: plan.localDeletes[ld] });
+          } catch (_) { /* already gone */ }
+          await hashStore.remove(plan.localDeletes[ld]);
+        }
       }
       ctx.summary.skipped = plan.inSync + plan.setSynced.length +
-        plan.forgetSynced.length + plan.localDeletes.length;
+        plan.forgetSynced.length + (doPull ? plan.localDeletes.length : 0);
 
       // ── conflicts known before pushing (server state from the manifest) ─
       syncStatus = 'conflicting';
-      for (var pc = 0; pc < plan.conflicts.length; pc++) {
-        await resolveConflict(ctx, plan.conflicts[pc].path, plan.conflicts[pc]);
+      if (doPull) {
+        for (var pc = 0; pc < plan.conflicts.length; pc++) {
+          await resolveConflict(ctx, plan.conflicts[pc].path, plan.conflicts[pc]);
+        }
       }
 
       // ── push ────────────────────────────────────────────────────────────
-      syncStatus = 'pushing';
-      try {
-        await pushOps(ctx, plan.pushChanges, plan.pushDeletions);
+      if (doPush) {
+        syncStatus = 'pushing';
+        try {
+          await pushOps(ctx, plan.pushChanges, plan.pushDeletions);
 
-        // A CAS conflict despite our pre-check means the server moved
-        // between manifest and commit — resolve with the state it reported.
-        for (var lc = 0; lc < ctx.lateConflicts.length; lc++) {
-          await resolveConflict(ctx, ctx.lateConflicts[lc].path, ctx.lateConflicts[lc]);
-        }
+          // A CAS conflict despite our pre-check means the server moved
+          // between manifest and commit — resolve with the state it reported.
+          // Push-only mode leaves them latent (counted below): resolving
+          // would rewrite local files, which a PUSH must never do.
+          for (var lc = 0; lc < ctx.lateConflicts.length; lc++) {
+            if (doPull) {
+              await resolveConflict(ctx, ctx.lateConflicts[lc].path, ctx.lateConflicts[lc]);
+            } else {
+              ctx.summary.conflicts++;
+              ctx.summary.conflictPaths.push(ctx.lateConflicts[lc].path);
+            }
+          }
 
-        if (ctx.pushSupported && ctx.copyChanges.length > 0) {
-          await pushOps(ctx, ctx.copyChanges, []);
+          if (ctx.pushSupported && ctx.copyChanges.length > 0) {
+            await pushOps(ctx, ctx.copyChanges, []);
+          }
+        } catch (e) {
+          if (e && e.code === 'EPUSH') {
+            ctx.pushSupported = false; // old pull-only sync-server
+          } else {
+            throw e;
+          }
         }
-      } catch (e) {
-        if (e && e.code === 'EPUSH') {
-          ctx.pushSupported = false; // old pull-only sync-server
-        } else {
-          throw e;
-        }
+        ctx.summary.pushSupported = ctx.pushSupported;
       }
-      ctx.summary.pushSupported = ctx.pushSupported;
+      // push-only never resolved plan.conflicts — their count is deliberately
+      // absent from the summary (only lateConflicts, above, are reported).
 
       syncStatus = 'finish';
       return ctx.summary;
