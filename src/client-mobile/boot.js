@@ -984,6 +984,7 @@ const MOBILE_SCRIPTS = [
     installCreateVaultInterceptor();
     installExternalStorageGate();
     installVersionDisplay();
+    installNeonSyncButton();
     seedNativeVaultList()
       .catch(function (err) { console.warn('[obsidian-web] seedNativeVaultList failed:', err); })
       .then(function () {
@@ -1046,6 +1047,79 @@ const MOBILE_SCRIPTS = [
   // back to the tab/app picks up external edits without a manual click.
   // VAULT_TYPE==='folder' guard only (DoD#4) — 'local' (OPFS) vaults can
   // never change externally, must stay a no-op.
+  // "Use Neon cloud synced vault" - injected directly UNDER Obsidian's own
+  // "Use my existing vault" on the bundle's start screen (app.js cte:
+  // .mobile-onboarding > .button-container with optionCreate/optionUseExisting).
+  // One click sets up the full client-only + Neon flow: a fresh local OPFS
+  // vault plus the ow-sync localStorage config that run-sync/run-pull read -
+  // i.e. a vault whose changes bidirectionally sync to the /sync/v1 endpoint
+  // backed by Neon Postgres (markport-sync deployment). The SYNC_TOKEN is
+  // typed by the user at click time and never ships in the bundle; the server
+  // URL defaults to this page's own origin (same deployment serves /sync/v1).
+  //
+  // Button matching: text first (the EN literal), structural fallback for
+  // localized UIs - the start screen is the only one carrying .logo, and it
+  // renders exactly two buttons in that container (Create / Use existing).
+  // Every injected element carries data-ow-injected (repo-wide convention -
+  // installCreateVaultInterceptor skips anything marked, and its mod-cta
+  // selector never matches this plain button anyway).
+  function installNeonSyncButton() {
+    function apply() {
+      var boxes = document.querySelectorAll('.mobile-onboarding .button-container');
+      for (var i = 0; i < boxes.length; i++) {
+        var box = boxes[i];
+        if (box.querySelector('[data-ow-injected="neon-sync"]')) continue;
+        var screen = box.closest('.mobile-onboarding');
+        var buttons = box.querySelectorAll('button');
+        var anchor = null;
+        for (var j = 0; j < buttons.length; j++) {
+          if (/use my existing vault/i.test(buttons[j].textContent)) { anchor = buttons[j]; break; }
+        }
+        if (!anchor && screen && screen.querySelector('.logo') && buttons.length === 2) {
+          anchor = buttons[1];
+        }
+        if (!anchor) continue;
+
+        var btn = document.createElement('button');
+        btn.setAttribute('data-ow-injected', 'neon-sync');
+        btn.textContent = 'Use Neon cloud synced vault';
+        btn.className = anchor.className;   // same look as "Use my existing vault"
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          startNeonVault();
+        });
+        anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+      }
+    }
+    apply();
+    var obs = new MutationObserver(apply);
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // The flow behind the button: name -> token -> server (3 prompts, cancel at
+  // any point aborts without side effects), then create the OPFS vault, write
+  // its sync config, and navigate (path-based '/vault/<id>' reload, same as
+  // the create-vault interceptor's app-storage branch above).
+  function startNeonVault() {
+    var name = window.prompt('Vault name:', 'Neon Vault');
+    if (name === null) return;
+    name = name.trim() || 'Neon Vault';
+    var token = window.prompt('Sync token (the SYNC_TOKEN of the sync deployment):');
+    if (token === null) return;
+    token = token.trim();
+    if (!token) return;
+    var base = window.prompt('Sync server URL:', location.origin);
+    if (base === null) return;
+    base = base.trim().replace(/\/+$/, '');
+    if (!base) return;
+
+    var id = window.__owLocalVaults.create(name).id;
+    localStorage.setItem('ow-sync:' + id, JSON.stringify({ baseUrl: base, token: token }));
+    console.log('[obsidian-web] neon vault created:', id, '->', base);
+    navigateToVault(id);
+  }
+
   function installFolderRefreshWatch() {
     if (VAULT_TYPE !== 'folder') return;
     if (!window.Capacitor || !window.Capacitor.Plugins || !window.Capacitor.Plugins.Filesystem) return;
