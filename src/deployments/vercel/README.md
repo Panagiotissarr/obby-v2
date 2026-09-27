@@ -58,10 +58,24 @@ cd src/deployments/vercel
 npm install
 DATABASE_URL=postgres://… npm run migrate   # idempotent; also applied lazily on first use
 
-# 2. build + deploy from this directory
-npm run build        # -> public/  (needs ../vendor/obsidian-mobile — see repo README setup)
-vercel deploy --prod # or connect the repo in the Vercel dashboard
+# 2. build locally (vendor/ exists only on your machine — see repo README setup)
+npm run build        # -> public/
+
+# 3. link, configure, ship
+vercel link --yes --project <name>
+vercel env add SYNC_TOKEN   production --value <long-random-token> --yes
+vercel env add DATABASE_URL production --value <neon-pooled-url>    --yes
+vercel deploy --prod        # uploads public/ + api/, runs no build remotely
 ```
+
+> **The Vercel project's Build Command must be empty** (Settings → Build
+> Command, or `vercel project update <name> --build-command ""`). The build is
+> local-only on purpose: `vendor/` (Obsidian's bundle) is gitignored, so it
+> never exists on Vercel's builder and `npm run build` fails there by design —
+> same rule as the Cloudflare deployment: build the artifact on your machine,
+> ship the artifact. A Git-connected auto-build would need a vendor-download
+> step first and is not supported out of the box. `vercel.json` therefore
+> carries no `buildCommand` either.
 
 Environment variables (Vercel → Project → Settings → Environment Variables):
 

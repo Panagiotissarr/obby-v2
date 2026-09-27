@@ -302,7 +302,9 @@ npm test        # node --test: protocol, stores, proxy, adapter, fixture build
 
 A deployment needs two environment variables: `SYNC_TOKEN` (devices authenticate with it;
 **unset means every sync request answers 503** - fail-closed on purpose) and `DATABASE_URL`
-(the Neon pooled connection string). The client-side config is the same `localStorage`
+(the Neon pooled connection string). Builds are local-only (`vendor/` is never uploaded), so the
+Vercel project's Build Command must be **empty** - `vercel deploy --prod` ships the prebuilt
+`public/` as-is. The client-side config is the same `localStorage`
 `ow-sync:<vaultId>` key as pull-sync. Full setup, Vercel's 4.5 MB chunking story, and the
 conflict rules: `src/deployments/vercel/README.md`.
 
