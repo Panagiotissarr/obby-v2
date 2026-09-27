@@ -171,7 +171,8 @@ async function extractApk(apkPath, tmpDir, targetDir) {
   // Build list of paths to extract from the APK
   const apkPaths = [
     ...Object.keys(EXTRACT_MAP),
-    ...EXTRACT_DIRS.map(d => d.apk + '*'),  // unzip supports wildcards
+    ...EXTRACT_DIRS.map(d => d.apk + '**'),  // '**' crosses '/' (Info-ZIP: '*' stops at each separator,
+                                              //  so 'lib/*' would silently skip lib/codemirror/ et al)
   ];
 
   console.log('  Extracting from APK…');
