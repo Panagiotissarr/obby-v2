@@ -12,7 +12,7 @@ host doesn't have: a sync endpoint devices can **push to and pull from**.
 | Sync | `/sync/v1/*` functions in `api/` (`vercel.json` rewrites `/sync/v1/:path*` → `/api/sync/v1/:path*`) |
 | Proxy | `POST /api/proxy-request` (same allow-listed GitHub/obsidian.md proxy as the Cloudflare Worker) |
 | Storage | Neon Postgres (`DATABASE_URL`) — blobs, per-vault file table, revision cursor |
-| Auth | one `SYNC_TOKEN` (Bearer), fail-closed: unset → every sync request answers 503 |
+| Auth | `SYNC_TOKEN` (operator Bearer key) + per-vault password claims (`mpv1.*` scoped tokens); fail-closed: unset → every sync request answers 503 |
 
 ## Why chunking exists (Vercel's 4.5 MB body cap)
 
@@ -88,9 +88,58 @@ Environment variables (Vercel → Project → Settings → Environment Variables
 | `SYNC_BLOB_FULL_GET_LIMIT` | no | un-ranged GET cap, default 3 MiB |
 | `SYNC_PG_SSL_NO_VERIFY` | no | `1` → skip TLS verification (TLS-intercepting proxies only) |
 
+## Vault names and password claims
+
+A vault's **name is its id** and its **password is the credential** — nothing
+per-device to copy around:
+
+| | |
+|---|---|
+| `GET /sync/v1/vaults/:name` | public status → `{name, claimed}` (`no-store` — the web gate needs it before any password is known) |
+| `POST /sync/v1/vaults/:name` `{password}` | unclaimed → **claim** it (201) · claimed → **unlock** (200) · wrong password → 401 · bad request → 400 · 10 attempts/min/IP → 429 |
+| Name rule | `^[A-Za-z0-9._-]{1,64}$` — the same id used in `?vault=` and in `/vault/<name>` links |
+| Password rule | 8–1024 characters; scrypt-hashed with a random 16-byte salt, constant-time compare |
+| Token issued | `mpv1.<b64url(name)>.<expMs>.<hmac-sha256>` — 90-day TTL, HMAC keyed by `SYNC_TOKEN` |
+
+Claims fail closed with everything else: `SYNC_TOKEN` unset (or unset at
+claim time) → 503, because that key *is* the HMAC key. Two kinds of Bearer
+token are then accepted by `requireAuth`:
+
+- **`mpv1.*` vault tokens** — scoped to their one vault; any other `?vault=`
+  value answers `403` ("this token is only valid for vault …"). Scope is
+  enforced centrally in `getVaultOrThrow`, so manifest/blob/commit/blobs-missing
+  all inherit it.
+- **The global `SYNC_TOKEN`** — the operator key: every vault, no expiry.
+  Also the recovery route (there is no password reset in v1: a name stays
+  claimed to whoever first claimed it).
+
+### The browser flow
+
+1. Open `/vault/<name>` (SPA fallback → same app shell). During boot the
+   client fetches the vault's status and renders a **password gate** instead
+   of the usual "no backend" error.
+2. Unclaimed: the typed password **claims** the vault. Claimed: it must
+   **unlock** it (wrong password → stay on the gate with an error).
+3. Success stores `localStorage['ow-sync:<name>'] = {baseUrl, token, vault}`
+   and reloads — the vault then boots as a synced vault with the usual
+   file-explorer sync button.
+4. `/starter` joins in from the name field: a typed vault name is looked up
+   first — claimed → the gate; unclaimed → a password prompt claims it —
+   and only falls back to "create a local vault" when the name is empty or
+   not a valid vault id.
+
+### The Obsidian plugin
+
+`src/neon-sync-plugin/` speaks this same protocol from desktop **and** mobile
+Obsidian (its **Connect** button posts to this claim/unlock endpoint, so a
+password set in one client unlocks the vault in the other). See its README.
+
 ## Point a device at it
 
-Same localStorage config as the pull-sync protocol (there is no settings UI):
+The easiest path needs no code: open `/vault/<name>`, type the password (or
+use the Obsidian plugin). For a manual setup — e.g. pointing a device straight
+at the operator's `SYNC_TOKEN` — the same localStorage config as the
+pull-sync protocol still works:
 
 ```js
 localStorage.setItem('ow-sync:<vaultId>', JSON.stringify({
@@ -126,7 +175,9 @@ or `_headers` (functions live in `api/`, headers in `vercel.json`).
 |------|---------|
 | `vercel.json` | rewrites: `/sync/v1/*` → functions, `/starter` + `/vault/*` → SPA fallback |
 | `lib/adapter.js` | Vercel `(req,res)` ⇄ web-standard `(Request)=>Response` bridge |
-| `lib/auth.js` | Bearer token check (sha-256 + constant-time compare, fail-closed) |
+| `lib/auth.js` | Bearer token check (sha-256 + constant-time compare, fail-closed); sets `request.vaultScope` for `mpv1.*` tokens |
+| `lib/claims.js` | password hashing (scrypt) + `mpv1.*` token issue/verify |
+| `lib/http.js` | `getVaultOrThrow` — vault resolution **and** the central scope check (403) |
 | `lib/commit-rules.js` | the CAS/conflict rules — one implementation shared by both stores |
 | `lib/store-pg.js` | Postgres store: batched SQL (≤5 round-trips per commit), lazy schema, GC |
 | `lib/store-memory.js` | reference store (dev + tests) |
@@ -134,6 +185,7 @@ or `_headers` (functions live in `api/`, headers in `vercel.json`).
 | `api/sync/v1/blob/[hash].js` | chunked upload / immutable download / byte ranges |
 | `api/sync/v1/commit.js` | push: apply-or-conflict, `422 {hashes}` retry contract |
 | `api/sync/v1/blobs/missing.js` | "which of these don't you have?" (skip re-uploads) |
+| `api/sync/v1/vaults/[name].js` | vault status / claim / unlock (password is the credential) |
 | `api/sync/v1/{changes,live,deletions}.js` | `501` stubs (not needed by this client) |
 | `api/proxy-request.js` | port of the Cloudflare `proxy-worker.js` (no Cache API) |
 | `scripts/build-assets.js` | static build (port of the Cloudflare build script) |
@@ -147,6 +199,9 @@ npm test
 
 - protocol: auth (fail-closed, empty-body 401), manifest pagination/ETag,
   blob chunking/ranges/`413`, commit CAS + conflict + `422`, validation limits
+- vault claims: scrypt claim/unlock round-trips, wrong password, scoped-token
+  403 matrix, per-IP rate limit (429), name validation (`test/claims.test.js`,
+  `test/vaults.test.js`)
 - `lib/store-memory.js` — the contract `lib/store-pg.js` must match
   (the PG store itself is exercised against a real database when
   `DATABASE_URL` points at one — it's opt-in, never runs against production
@@ -167,3 +222,6 @@ npm test
   works against one works against the other (pull-only `src/sync-server/`
   simply 501s the push endpoints, which the client treats as
   "no push support").
+- `src/neon-sync-plugin/main.js` copies `planSync` **verbatim** from
+  `src/client-mobile/sync/plan-sync.js`; both test suites run the same
+  decision-table vectors — change both files together.

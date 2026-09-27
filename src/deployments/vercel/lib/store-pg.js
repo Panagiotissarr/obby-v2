@@ -294,6 +294,27 @@ export async function createPgStore(databaseUrl, limits = {}) {
       return result;
     },
 
+    async getClaim(name) {
+      const res = await pool.query(
+        'select pw_salt, pw_hash from vault_claims where name = $1',
+        [name]
+      );
+      const row = res.rows[0];
+      return row ? { salt: row.pw_salt, hash: row.pw_hash } : null;
+    },
+
+    // Atomic: ON CONFLICT DO NOTHING reports 0 rows if someone else claimed
+    // the name first, so exactly one claimer wins a race.
+    async putClaim(name, salt, hash) {
+      const res = await pool.query(
+        `insert into vault_claims (name, pw_salt, pw_hash)
+         values ($1, $2, $3)
+         on conflict (name) do nothing`,
+        [name, salt, hash]
+      );
+      return res.rowCount === 1;
+    },
+
     async gc() {
       lastGcAt = 0;
       await gc();

@@ -8,6 +8,7 @@
 // timing.
 
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { verifyVaultToken } from './claims.js';
 import { getSyncToken } from './config.js';
 import { json } from './http.js';
 
@@ -26,6 +27,12 @@ export function checkToken(provided, expected) {
 // Returns `null` when the request is authorized, otherwise the 401/503
 // Response to send back — so handlers read:
 //   const denied = await requireAuth(request); if (denied) return denied;
+//
+// Two token shapes are accepted (see lib/claims.js for the second):
+//   - the global SYNC_TOKEN: full access to every vault (the operator key);
+//   - `mpv1.<name>.<exp>.<sig>`: scoped to one vault. On success the scope
+//     is attached as `request.vaultScope`, and getVaultOrThrow (lib/http.js)
+//     refuses any other `?vault=` with 403.
 export function requireAuth(request) {
   const expected = getSyncToken();
   if (!expected) {
@@ -33,8 +40,19 @@ export function requireAuth(request) {
   }
   const header = request.headers.get('authorization') || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!checkToken(token, expected)) {
+  if (!token) {
     return new Response(null, { status: 401 }); // empty body, like sync-server
+  }
+  if (token.startsWith('mpv1.')) {
+    const scope = verifyVaultToken(token, expected);
+    if (!scope) {
+      return new Response(null, { status: 401 });
+    }
+    request.vaultScope = scope;
+    return null;
+  }
+  if (!checkToken(token, expected)) {
+    return new Response(null, { status: 401 });
   }
   return null;
 }

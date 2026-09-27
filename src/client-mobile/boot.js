@@ -867,8 +867,24 @@ const MOBILE_SCRIPTS = [
             setTimeout(function () { window.__owCreatingVault = false; }, 0);
           });
       } else {
-        var id2 = window.__owLocalVaults.create(name).id;   // OPFS (type ברירת-מחדל 'local')
-        navigateToVault(id2);   // path-based — '/vault/<id2>', ניתן-לשיתוף
+        // The typed vault name is a claim LINK (client-only builds): look
+        // it up on the sync server — claimed → hand off to its password
+        // gate (/vault/<name>); unclaimed → prompt for a password, claim
+        // it, and create the vault + sync config under that exact id.
+        // Empty/invalid names (the 'Untitled' default path) and non-
+        // client-only deployments keep the old local-only create below;
+        // offline falls back to it inside lookupAndClaimVault.
+        var typedName = nameInput.value.trim();
+        if (window.__owBackend === 'none' && typedName && OW_VAULT_NAME_RE.test(typedName)) {
+          lookupAndClaimVault(typedName, function () {
+            // abort → release the one-shot guard after this click's event trio
+            // (same setTimeout pattern as the external-storage catch above).
+            setTimeout(function () { window.__owCreatingVault = false; }, 0);
+          });
+        } else {
+          var id2 = window.__owLocalVaults.create(name).id;   // OPFS (type ברירת-מחדל 'local')
+          navigateToVault(id2);   // path-based — '/vault/<id2>', ניתן-לשיתוף
+        }
       }
     };
     // pointerdown+mousedown+click (capture) — לא רק click. בחלון צר (auto-mobile,
@@ -1118,6 +1134,220 @@ const MOBILE_SCRIPTS = [
     localStorage.setItem('ow-sync:' + id, JSON.stringify({ baseUrl: base, token: token }));
     console.log('[obsidian-web] neon vault created:', id, '->', base);
     navigateToVault(id);
+  }
+
+  // ── Vault name links (/vault/<name>) — password claims ─────────────────────
+  // The name in a shared link IS the vault id. The sync server knows whether
+  // it's claimed (GET /sync/v1/vaults/<name>) and exchanges the password for
+  // a vault-scoped mpv1 token (POST, same route — claim-if-unlocked-else-
+  // unlock). One shared saver writes the result: a local OPFS registry entry
+  // under the name itself, plus the ow-sync config run-sync/run-pull read
+  // (baseUrl = this origin — the claim endpoint just answered on it; vault =
+  // the name — the mpv1 token is only valid for that vault on /sync/v1).
+  var OW_VAULT_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+  function saveClaimedVault(name, token) {
+    if (window.__owLocalVaults && !window.__owLocalVaults.get(name)) {
+      window.__owLocalVaults.create(name, { id: name });   // id === name (type 'local')
+    }
+    localStorage.setItem('ow-sync:' + name, JSON.stringify({
+      baseUrl: location.origin,
+      token: token,
+      vault: name,
+    }));
+    console.log('[obsidian-web] claimed vault ready:', name);
+  }
+
+  // Starter screen (installCreateVaultInterceptor's app-storage branch):
+  // look up the typed name, then claim it — or hand off to its gate if
+  // someone else already did. Server unreachable / no /sync/v1 on this
+  // deployment → fall back to the old local-only create (nothing was
+  // written yet, so the fallback is side-effect free). Cancel at the
+  // password prompt aborts the whole creation (onAbort releases the
+  // interceptor's one-shot guard).
+  function lookupAndClaimVault(name, onAbort) {
+    var endpoint = '/sync/v1/vaults/' + encodeURIComponent(name);
+    fetch(endpoint, { cache: 'no-store' })
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (info) {
+        if (info && info.claimed) {
+          navigateToVault(name);   // its password gate (showVaultGate) takes it from here
+          return;
+        }
+        var pw = window.prompt('Choose a password to claim the vault "' + name +
+          '" (at least 8 characters):');
+        if (pw === null) { onAbort(); return; }   // changed their mind — create nothing
+        if (pw.length < 8) {
+          window.alert('Password must be at least 8 characters.');
+          onAbort();
+          return;
+        }
+        fetch(endpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ password: pw }),
+        })
+          .then(function (res) {
+            if (res.status === 401) return { raced: true };   // claimed by someone else meanwhile
+            if (!res.ok) {
+              return res.json().then(function (b) {
+                throw new Error((b && b.error) || ('HTTP ' + res.status));
+              });
+            }
+            return res.json();
+          })
+          .then(function (body) {
+            if (body && body.raced) { navigateToVault(name); return; }
+            if (!body || !body.token) throw new Error('no token in claim response');
+            saveClaimedVault(name, body.token);
+            navigateToVault(name);
+          })
+          .catch(function (err) {
+            console.warn('[obsidian-web] claim failed:', err && err.message || err);
+            window.alert('Could not claim "' + name + '": ' + ((err && err.message) || 'request failed'));
+            onAbort();
+          });
+      })
+      .catch(function (err) {
+        // Status check failed — server down or this deployment has no
+        // /sync/v1 → behave exactly like before: a local-only vault.
+        console.warn('[obsidian-web] vault lookup failed, creating local vault:', err && err.message || err);
+        var id = window.__owLocalVaults.create(name).id;
+        navigateToVault(id);
+      });
+  }
+
+  // The gate for an unrecognized /vault/<name> on a client-only build
+  // (replaces the old "not on this device" rejection — see the verify branch
+  // below). Renders inside the existing #ow-loading overlay (like
+  // showGrantScreen): status text + password field + Unlock/Claim + Back.
+  // Success registers the vault and RELOADS — VAULT_TYPE was already
+  // resolved to 'server' before verify ran, so boot must start over with
+  // the fresh registry entry ('local') rather than continue in place; this
+  // promise therefore never settles. Wrong password / rate limit keep the
+  // form up with an inline error; Back and network failure reject with the
+  // old human message (owHuman → shared .catch → /starter).
+  function showVaultGate(name) {
+    return new Promise(function (resolve, reject) {
+      var overlay = document.getElementById('ow-loading');
+      var host = overlay || document.body;
+
+      function bail() {
+        var err = new Error('This vault isn\'t on this device — vaults are stored locally in the browser.');
+        err.owHuman = true;
+        reject(err);
+      }
+
+      setStatus('Checking vault "' + name + '"...');
+      fetch('/sync/v1/vaults/' + encodeURIComponent(name), { cache: 'no-store' })
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function (info) {
+          renderGate(!!(info && info.claimed));
+        })
+        .catch(function (err) {
+          console.warn('[obsidian-web] vault gate: status check failed:', err && err.message || err);
+          bail();
+        });
+
+      function renderGate(claimed) {
+        setStatus(claimed
+          ? 'Vault "' + name + '" is password-protected — enter its password to open it.'
+          : 'No vault named "' + name + '" exists yet — choose a password to claim it. It will be created on this device and synced to this server.');
+
+        var wrap = document.createElement('div');
+        wrap.setAttribute('data-ow-injected', 'vault-gate');
+        wrap.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-top:12px;' +
+          'max-width:320px;font:13px -apple-system,BlinkMacSystemFont,sans-serif;';
+
+        var input = document.createElement('input');
+        input.type = 'password';
+        input.placeholder = claimed ? 'Password' : 'New password (at least 8 characters)';
+        input.setAttribute('autocomplete', claimed ? 'current-password' : 'new-password');
+        input.style.cssText = 'padding:8px 10px;border:1px solid #bbb;border-radius:4px;' +
+          'font:14px -apple-system,BlinkMacSystemFont,sans-serif;';
+
+        var errLine = document.createElement('div');
+        errLine.style.cssText = 'color:#c0392b;font:12px -apple-system,BlinkMacSystemFont,sans-serif;min-height:14px;';
+
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;';
+
+        var submit = document.createElement('button');
+        submit.setAttribute('data-ow-injected', 'vault-gate-submit');
+        submit.textContent = claimed ? 'Unlock' : 'Claim vault';
+        submit.style.cssText = 'padding:8px 16px;background:#7f6df2;color:#fff;border:none;' +
+          'border-radius:4px;cursor:pointer;font:13px -apple-system,BlinkMacSystemFont,sans-serif;';
+
+        var back = document.createElement('button');
+        back.setAttribute('data-ow-injected', 'vault-gate-cancel');
+        back.textContent = 'Back';
+        back.style.cssText = 'padding:8px 16px;background:transparent;color:#888;' +
+          'border:1px solid #bbb;border-radius:4px;cursor:pointer;' +
+          'font:13px -apple-system,BlinkMacSystemFont,sans-serif;';
+
+        function submitPassword() {
+          var pw = input.value;
+          if (pw.length < 8) {
+            errLine.textContent = 'Password must be at least 8 characters.';
+            return;
+          }
+          submit.disabled = true;
+          errLine.textContent = '';
+          fetch('/sync/v1/vaults/' + encodeURIComponent(name), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ password: pw }),
+          })
+            .then(function (res) {
+              if (res.status === 401) { errLine.textContent = 'Wrong password.'; return null; }
+              if (res.status === 429) {
+                errLine.textContent = 'Too many attempts — wait a minute and try again.';
+                return null;
+              }
+              if (!res.ok) {
+                return res.json().then(function (b) {
+                  throw new Error((b && b.error) || ('HTTP ' + res.status));
+                });
+              }
+              return res.json();
+            })
+            .then(function (body) {
+              if (!body) { submit.disabled = false; return; }   // error line already set
+              if (!body.token) throw new Error('no token in claim response');
+              saveClaimedVault(name, body.token);
+              location.reload();   // re-boot as a 'local' vault (never settles here)
+            })
+            .catch(function (err) {
+              console.warn('[obsidian-web] vault gate: unlock failed:', err && err.message || err);
+              errLine.textContent = (err && err.message) || 'Request failed.';
+              submit.disabled = false;
+            });
+        }
+
+        submit.addEventListener('click', submitPassword);
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') submitPassword();
+        });
+        back.addEventListener('click', function () {
+          if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+          bail();
+        });
+
+        row.appendChild(submit);
+        row.appendChild(back);
+        wrap.appendChild(input);
+        wrap.appendChild(errLine);
+        wrap.appendChild(row);
+        host.appendChild(wrap);
+        input.focus();
+      }
+    });
   }
 
   function installFolderRefreshWatch() {
@@ -1388,24 +1618,21 @@ const MOBILE_SCRIPTS = [
       return { isDirectory: true };
     })();
   } else if (window.__owBackend === 'none') {
-    // §3.2 — VAULT_TYPE fell back to 'server' because VAULT_ID isn't in the
-    // local registry: an unrecognized deep-link (shared link, wiped
-    // storage, different device — exactly the r/ObsidianMD scenario, §0).
-    // window.__owBackend==='none' is a client-only BUILD (injected only by
-    // the CF build, see index.html/build-assets.sh) — there is no /api/fs to
-    // ask, so skip the fetch entirely (DoD#4: zero network request) and fail
-    // with a human message (DoD#3) instead of the raw "Error: ... (HTTP
-    // 404)" below. err.owHuman marks this for the shared .catch handler
-    // (below) so ONLY this message skips the generic "Error: " prefix —
-    // every other verify failure (local/folder/real-server 404) is
-    // untouched, no regression (DoD#5: runtime-server never sets
-    // __owBackend, so this branch is unreachable there).
-    // §3.5א (calev PARTIAL, ממצא 3): §3.2 המקורי הכתיב את הנוסח בעברית —
-    // טעות, שכן זו בדיוק ההודעה שמבקר-r/ObsidianMD (§0, ממשק אנגלי) רואה
-    // אחרי לחיצה על לינק משותף. §3.5א גובר.
-    var humanErr = new Error('This vault isn\'t on this device — vaults are stored locally in the browser.');
-    humanErr.owHuman = true;
-    verifyPromise = Promise.reject(humanErr);
+    // §3.2 → vault-gate flow. VAULT_TYPE fell back to 'server' because
+    // VAULT_ID isn't in the local registry: an unrecognized deep-link
+    // (shared name link /vault/<name>, wiped storage, different device —
+    // exactly the r/ObsidianMD scenario, §0). window.__owBackend==='none' is
+    // a client-only BUILD (injected only by the CF/Vercel build, see
+    // index.html/build-assets) — there is no /api/fs to ask, so instead of
+    // the old immediate human error, showVaultGate (defined next to
+    // startNeonVault above) asks the sync server whether the name is
+    // claimed and renders the password prompt (claim-or-unlock) in this
+    // same overlay. Success registers the name + its mpv1 token and
+    // reloads; failure rejects with the SAME human message as before
+    // (err.owHuman, shared .catch below → no "Error: " prefix). Offline /
+    // no /sync/v1 → that exact old path, unchanged (DoD: runtime-server
+    // never sets __owBackend, so it still runs the /api/fs stat branch).
+    verifyPromise = showVaultGate(VAULT_ID);
   } else {
     verifyPromise = fetch('/api/fs/stat?vault=' + encodeURIComponent(VAULT_ID) + '&path=')
       .then(function (res) {

@@ -15,7 +15,7 @@
 import { toNodeHandler } from '../../../../lib/adapter.js';
 import { requireAuth } from '../../../../lib/auth.js';
 import { getBlobFullGetLimit } from '../../../../lib/config.js';
-import { SyncError, json, withErrors } from '../../../../lib/http.js';
+import { SyncError, getVaultOrThrow, json, withErrors } from '../../../../lib/http.js';
 import { getStore, MAX_PART_BYTES } from '../../../../lib/store.js';
 import { requireValidHash } from '../../../../lib/validate.js';
 
@@ -109,6 +109,7 @@ async function writeChunk(request, hash) {
 export const web = withErrors(async (request) => {
   const denied = requireAuth(request);
   if (denied) return denied;
+  getVaultOrThrow(request); // enforce mpv1 token scope (blobs are global, the request is not)
 
   const hash = requireValidHash(new URL(request.url).pathname.split('/').pop(), 'hash');
 

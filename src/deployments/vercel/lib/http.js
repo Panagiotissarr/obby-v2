@@ -37,6 +37,16 @@ export function getVaultOrThrow(request) {
   if (!VAULT_RE.test(vault)) {
     throw new SyncError(400, `invalid vault id: ${JSON.stringify(vault)}`);
   }
+  // Scope enforcement for password-gate tokens: requireAuth (lib/auth.js)
+  // sets request.vaultScope to the claimed name for `mpv1.*` tokens; a
+  // scoped token used against any other vault is refused here, which covers
+  // every sync endpoint because they all resolve the vault through this
+  // function. Requests carrying the global SYNC_TOKEN have no scope and
+  // reach all vaults.
+  const scope = request && request.vaultScope;
+  if (scope !== undefined && scope !== null && scope !== vault) {
+    throw new SyncError(403, `this token is only valid for vault ${JSON.stringify(scope)}`);
+  }
   return vault;
 }
 

@@ -52,3 +52,14 @@ create table if not exists vault_meta (
   rev        bigint not null default 0,
   updated_at timestamptz not null default now()
 );
+
+-- Password claims for name-addressed vaults (/vault/<name> links, lib/claims.js).
+-- One row per claimed name; scrypt verifier only, the password itself is
+-- never stored. INSERT ... ON CONFLICT DO NOTHING makes claim attempts
+-- atomic, so two people racing to claim the same name cannot both win.
+create table if not exists vault_claims (
+  name       text primary key,
+  pw_salt    text not null,
+  pw_hash    text not null,
+  created_at timestamptz not null default now()
+);

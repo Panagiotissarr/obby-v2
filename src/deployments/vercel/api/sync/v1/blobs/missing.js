@@ -9,7 +9,7 @@
 import { toNodeHandler } from '../../../../lib/adapter.js';
 import { requireAuth } from '../../../../lib/auth.js';
 import { MAX_HASH_BATCH } from '../../../../lib/config.js';
-import { SyncError, json, withErrors } from '../../../../lib/http.js';
+import { SyncError, getVaultOrThrow, json, withErrors } from '../../../../lib/http.js';
 import { getStore } from '../../../../lib/store.js';
 import { isValidHash } from '../../../../lib/validate.js';
 
@@ -17,6 +17,7 @@ export const web = withErrors(async (request) => {
   if (request.method !== 'POST') throw new SyncError(405, 'method not allowed');
   const denied = requireAuth(request);
   if (denied) return denied;
+  getVaultOrThrow(request); // enforce mpv1 token scope
 
   let body;
   try {

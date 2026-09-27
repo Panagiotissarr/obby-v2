@@ -73,6 +73,7 @@ The output carries **no JavaScript**. Code samples are highlighted at build time
 | Runtime (the browser side) | `src/client-mobile/` |
 | Node backend (optional) | `src/runtime-server/` |
 | Pull-sync server | `src/sync-server/` |
+| Obsidian plugin (Neon sync, desktop + mobile) | `src/neon-sync-plugin/` |
 | Cloudflare deployment | `src/deployments/cloudflare/` |
 | Vercel deployment (app + `/sync/v1` on Neon) | `src/deployments/vercel/` |
 

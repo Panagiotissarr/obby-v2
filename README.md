@@ -91,6 +91,9 @@ src/                         our source code
 │   └── server/              Node.js HTTP/WS backend
 ├── sync-server/             optional pull-sync server (/sync/v1, SYNC_TOKEN) - separate from
 │                             the runtime-server backend above, see src/sync-server/README.md
+├── neon-sync-plugin/         Obsidian plugin (desktop AND mobile): same /sync/v1 protocol as
+│                             the browser client, single-file (main.js + manifest.json),
+│                             install by copying into <vault>/.obsidian/plugins/markport-neon-sync/
 ├── plugins/                 system plugin overlay (e.g. obsidian-web-layout)
 └── deployments/             provider-specific deployments
     ├── cloudflare/          client-only static deployment (OPFS) + a small edge Worker -
@@ -304,9 +307,17 @@ A deployment needs two environment variables: `SYNC_TOKEN` (devices authenticate
 **unset means every sync request answers 503** - fail-closed on purpose) and `DATABASE_URL`
 (the Neon pooled connection string). Builds are local-only (`vendor/` is never uploaded), so the
 Vercel project's Build Command must be **empty** - `vercel deploy --prod` ships the prebuilt
-`public/` as-is. The client-side config is the same `localStorage`
-`ow-sync:<vaultId>` key as pull-sync. Full setup, Vercel's 4.5 MB chunking story, and the
-conflict rules: `src/deployments/vercel/README.md`.
+`public/` as-is.
+
+Vaults are addressed by **name + password**, not by a token you copy between devices: open
+`/vault/<name>` and type the password (the first password **claims** an unclaimed name; later
+ones must match), or use `/starter`'s name field to jump straight to a vault. Success stores an
+`mpv1.*` vault-scoped token (90 days) in localStorage and reloads as a synced vault. The same
+claim/unlock endpoint backs `src/neon-sync-plugin/`, an Obsidian plugin (desktop **and**
+mobile) that syncs a real Obsidian vault against the same server-side vault. Manual
+`localStorage` config with the operator's `SYNC_TOKEN` still works. Full setup, claim-flow
+details, Vercel's 4.5 MB chunking story, and the conflict rules:
+`src/deployments/vercel/README.md`.
 
 ---
 

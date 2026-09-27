@@ -15,6 +15,7 @@ export function createMemoryStore(limits = {}) {
   const parts = new Map(); // hash -> Map<index, {total, size, data}>
   const files = new Map(); // vault -> Map<path, {hash, size, deleted}>
   const meta = new Map(); // vault -> rev
+  const claims = new Map(); // vault name -> {salt, hash} (lib/claims.js)
 
   function vaultFiles(vault) {
     let map = files.get(vault);
@@ -123,8 +124,19 @@ export function createMemoryStore(limits = {}) {
       return { rev: String(rev), applied: applied.map((op) => op.path), conflicts };
     },
 
+    async getClaim(name) {
+      const row = claims.get(name);
+      return row ? { salt: row.salt, hash: row.hash } : null;
+    },
+
+    async putClaim(name, salt, hash) {
+      if (claims.has(name)) return false;
+      claims.set(name, { salt, hash });
+      return true;
+    },
+
     async gc() {
-      // no background sweeps needed — parts are dropped on assembly and
+      // no background sweeps needed - parts are dropped on assembly and
       // blobs are only ever written, never orphaned, in memory mode.
     },
 

@@ -26,6 +26,16 @@ before(async () => {
 after(async () => {
   if (store) {
     await store.gc();
+    // Claims are real rows in vault_claims - remove this run's throwaway
+    // names so repeated live runs don't accumulate garbage.
+    const { default: pg } = await import('pg');
+    const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { sslmode: 'require' } });
+    await client.connect();
+    try {
+      await client.query(`delete from vault_claims where name like $1`, [`${vault}%`]);
+    } finally {
+      await client.end();
+    }
     await store.close();
   }
 });
@@ -142,4 +152,12 @@ test('blob: content that does not match its hash is rejected EHASH', { skip: SKI
     store.putBlobPart(claimed, { index: 0, total: 1, size: tampered.length, data: tampered }),
     (err) => err instanceof StoreError && err.code === 'EHASH',
   );
+});
+
+test('claims: getClaim misses return null; putClaim is atomic (second insert loses)', { skip: SKIP }, async () => {
+  const name = `test-pg-claim-${run}`;
+  assert.equal(await store.getClaim(name), null);
+  assert.equal(await store.putClaim(name, 'salt-0000', 'hash-0000'), true);
+  assert.equal(await store.putClaim(name, 'salt-1111', 'hash-1111'), false);
+  assert.deepEqual(await store.getClaim(name), { salt: 'salt-0000', hash: 'hash-0000' });
 });
