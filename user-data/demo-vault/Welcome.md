@@ -7,11 +7,6 @@ This is a test vault for the obsidian-web project.
 - [[Linked notes]]
 - File tree
 - Markdown editing
-- Hebrew RTL support
-
-## Hebrew test
-
-זה טקסט בעברית כדי לבדוק תמיכה ב-RTL.
 
 ## Code
 

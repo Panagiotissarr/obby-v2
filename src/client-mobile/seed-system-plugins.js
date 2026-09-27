@@ -57,7 +57,7 @@
         await store.writeFile({ path: marker, data: p.version, encoding: 'utf8' });
         if (p.enabled !== false) enabled.push(p.id);   // ‏disabled → ‏seeded ‏אבל ‏לא ‏מופעל
       } else {
-        console.warn('[ow] system plugin ' + p.id + ' seed incomplete — retry בboot הבא');
+        console.warn('[ow] system plugin ' + p.id + ' seed incomplete — retry on next boot');
       }
     }
 

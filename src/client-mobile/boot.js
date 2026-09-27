@@ -1384,7 +1384,7 @@ const MOBILE_SCRIPTS = [
       // window.Notice may be absent in odd embeddings — spin+log always work
       // regardless (brief §6 risk: "setIcon/Notice לא חשופים").
       if (typeof window.Notice !== 'function') return;
-      new window.Notice(n ? ('נמצאו ' + n + ' שינויים') : 'אין שינויים חדשים');
+      new window.Notice(n ? (n + ' external changes found') : 'No new external changes');
     }
 
     var rescanning = false;
@@ -1453,7 +1453,7 @@ const MOBILE_SCRIPTS = [
         if (bar.querySelector('.ow-folder-refresh-btn')) continue;   // dedupe
         var btn = document.createElement('div');   // nav-action-button is a div in this bundle
         btn.className = 'clickable-icon nav-action-button ow-folder-refresh-btn';
-        btn.setAttribute('aria-label', 'רענן — שינויים חיצוניים בתיקייה');
+        btn.setAttribute('aria-label', 'Refresh — external folder changes');
         btn.innerHTML = OW_REFRESH_SVG;
         btn.addEventListener('click', function (e) {
           e.preventDefault();
@@ -1552,7 +1552,7 @@ const MOBILE_SCRIPTS = [
     var running = false;
     function doSync(mode) {
       if (running) {
-        notify('סנכרון כבר פעיל — נסה בעוד רגע'); // busy-skip used to be SILENT
+        notify('Sync already running — try again in a moment'); // busy-skip used to be SILENT
         return;
       }
       // Pull writes into OPFS from outside Obsidian's own adapter, so the
@@ -1560,8 +1560,7 @@ const MOBILE_SCRIPTS = [
       // pre-sync warning (requested): tell the user the page will refresh,
       // then reload right after a successful pull.
       if (mode === 'pull' && !window.confirm(
-        'The page will refresh after pulling so the new notes appear.\n' +
-        'הדף י רענן אחרי המשיכה כדי שההערות המעודכנות יוצגו. להמשיך?')) {
+        'The page will refresh after pulling so the new notes appear. Continue?')) {
         return; // declined — no sync, no spinner, no reload
       }
       running = true;
@@ -1575,18 +1574,18 @@ const MOBILE_SCRIPTS = [
       Promise.resolve(p)
         .then(function (r) {
           if (!r || r.skipped) {
-            notify('סנכרון כבר פעיל — נסה שוב בעוד רגע', 8000);
+            notify('Sync already running — try again in a moment', 8000);
             return;
           }
           if (mode === 'push') {
-            var msg = 'נשלח: ' + (r.pushed || 0) + ' קבצים';
-            if (r.deleted) msg += ', ' + r.deleted + ' נמחקו';
-            if (r.conflicts) msg += ', ' + r.conflicts + ' קונפליקטים (יסודרו במשיכה)';
-            notify(msg + (r.pushSupported === false ? ' · השרת תומך במשיכה בלבד' : ''));
+            var msg = 'Pushed: ' + (r.pushed || 0) + ' files';
+            if (r.deleted) msg += ', ' + r.deleted + ' deleted';
+            if (r.conflicts) msg += ', ' + r.conflicts + ' conflicts (will resolve on next pull)';
+            notify(msg + (r.pushSupported === false ? ' · server is pull-only' : ''));
           } else {
-            notify('נמשך: ' + (r.downloaded || 0) + ' הורדו' +
-              (r.conflicts ? ', ' + r.conflicts + ' קונפליקטים' : '') +
-              ' — מרענן את הדף…', 8000);
+            notify('Pulled: ' + (r.downloaded || 0) + ' downloaded' +
+              (r.conflicts ? ', ' + r.conflicts + ' conflicts' : '') +
+              ' — reloading the page…', 8000);
             // As promised in the confirm() above: reload so the explorer
             // re-reads OPFS and the pulled notes appear immediately.
             // (Failure paths never reach here — no reload on error.)
@@ -1598,7 +1597,7 @@ const MOBILE_SCRIPTS = [
           console.warn('[ow-sync] sync failed (' + mode + '):', e);
           // The runner's own error text (HTTP status, 401, timeout…) — the
           // old generic 'סנכרון נכשל' hid WHY, which read as "does nothing".
-          notify('סנכרון (' + (mode === 'push' ? 'שליחה' : 'משיכה') + ') נכשל: ' +
+          notify('Sync (' + (mode === 'push' ? 'push' : 'pull') + ') failed: ' +
             ((e && e.message) || e), 10000);
         })
         .then(function () { running = false; setSpin(false); });
@@ -1612,11 +1611,11 @@ const MOBILE_SCRIPTS = [
         if (bar.querySelector('.ow-sync-pull-btn')) continue;   // dedupe
         var defs = [
           { cls: 'ow-sync-pull-btn', svg: OW_PULL_SVG,
-            label: 'Pull from server — משוך שינויים מהשרת', mode: 'pull' },
+            label: 'Pull from server', mode: 'pull' },
         ];
         if (hasPush) {
           defs.unshift({ cls: 'ow-sync-push-btn', svg: OW_PUSH_SVG,
-            label: 'Push to server — שלח שינויים לשרת', mode: 'push' });
+            label: 'Push to server', mode: 'push' });
         }
         for (var d = 0; d < defs.length; d++) {
           (function (def) {
