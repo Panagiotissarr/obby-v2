@@ -147,7 +147,11 @@ function createApp(appConfig = {}) {
   // metadataCache `this.work(t)` call (which postMessage's to the worker
   // and waits for a reply) hangs forever, leaving inProgressTaskCount > 0
   // and blocking everything that waits for onCleanCache (rename, etc.).
-  const ROOT_FILES = ['worker.js', 'sim.js'];
+  // app.css is here for a different reason than the worker scripts: plugins
+  // that read Obsidian's own CSS match a <link> whose href is EXACTLY
+  // "app.css"/"/app.css" (callout-manager's viaDom fallback throws otherwise),
+  // so a nested /obsidian-mobile/app.css href is invisible to them.
+  const ROOT_FILES = ['worker.js', 'sim.js', 'app.css'];
   for (const f of ROOT_FILES) {
     app.get('/' + f, (req, res) => {
       res.sendFile(path.join(appConfig.obsidianMobilePath, f), {

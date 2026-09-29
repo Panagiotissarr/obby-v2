@@ -43,6 +43,7 @@ before(() => {
   fs.mkdirSync(path.join(vendor, 'i18n'), { recursive: true });
   fs.mkdirSync(path.join(vendor, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(vendor, 'app.js'), '// fixture app.js\n');
+  fs.writeFileSync(path.join(vendor, 'app.css'), '/* fixture app.css */\n');
   fs.writeFileSync(path.join(vendor, 'worker.js'), '// fixture worker.js\n');
   fs.writeFileSync(path.join(vendor, 'i18n', 'main.json'), '{}');
   fs.writeFileSync(path.join(vendor, 'lib', 'noop.js'), '//\n');
@@ -77,6 +78,7 @@ test('full fixture build: copies, cache-busts, injects, and drops no markers', (
   assert.ok(fs.existsSync(path.join(PUBLIC_DIR, 'client-mobile', 'sync', 'run-sync.js')));
   assert.ok(fs.existsSync(path.join(PUBLIC_DIR, 'obsidian-mobile', 'app.js')));
   assert.ok(fs.existsSync(path.join(PUBLIC_DIR, 'worker.js')));
+  assert.ok(fs.existsSync(path.join(PUBLIC_DIR, 'app.css')));
   assert.ok(fs.existsSync(path.join(PUBLIC_DIR, 'i18n', 'main.json')));
   assert.ok(fs.existsSync(path.join(PUBLIC_DIR, 'example-vault.json')));
 

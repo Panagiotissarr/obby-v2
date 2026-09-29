@@ -89,6 +89,11 @@ if [[ -f "$MAIN_DIR/vendor/obsidian-mobile/sim.js" ]]; then
   cp "$MAIN_DIR/vendor/obsidian-mobile/sim.js" "$PUBLIC_DIR/sim.js"
 fi
 
+# Obsidian's stylesheet at the root: plugins that read Obsidian's own CSS match
+# a <link> whose href is EXACTLY "app.css"/"/app.css" (callout-manager's viaDom
+# fallback throws otherwise), so a nested href is invisible to them.
+cp "$MAIN_DIR/vendor/obsidian-mobile/app.css" "$PUBLIC_DIR/app.css"
+
 # ── index.html: mobile entry point, served at / ────────────────────────────
 # No vault=demo injection, no starter.html — the mobile boot.js renders its
 # own native no-vault screen when there is no VAULT_ID (opfs-ux). Seeding of

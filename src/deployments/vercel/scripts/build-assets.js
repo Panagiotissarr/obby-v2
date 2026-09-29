@@ -126,6 +126,14 @@ async function build() {
   const simSrc = path.join(MAIN_DIR, 'vendor', 'obsidian-mobile', 'sim.js');
   if (fs.existsSync(simSrc)) copyFile(simSrc, path.join(PUBLIC_DIR, 'sim.js'));
 
+  // Obsidian's stylesheet at the root: plugins that read Obsidian's own CSS
+  // match a <link> whose href is EXACTLY 'app.css'/'/app.css'
+  // (callout-manager's viaDom fallback throws otherwise).
+  copyFile(
+    path.join(MAIN_DIR, 'vendor', 'obsidian-mobile', 'app.css'),
+    path.join(PUBLIC_DIR, 'app.css')
+  );
+
   // ── index.html + PWA manifest ────────────────────────────────────────────
   console.log('  copying index.html...');
   copyFile(

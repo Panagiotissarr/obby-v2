@@ -19,7 +19,11 @@
   <link rel="apple-touch-icon" href="/client-mobile/icons/icon-180.png"/>
   <link rel="icon" type="image/png" sizes="192x192" href="/client-mobile/icons/icon-192.png"/>
   <link rel="icon" type="image/png" sizes="32x32" href="/client-mobile/icons/favicon-32.png"/>
-  <link href="/obsidian-mobile/app.css" type="text/css" rel="stylesheet"/>
+  <!-- Served at the ROOT, not /obsidian-mobile/: plugins that read Obsidian's CSS
+       back out of the DOM match a <link> whose href is EXACTLY "app.css" or
+       "/app.css" (callout-manager's viaDom fallback throws otherwise). All three
+       targets mirror the file to the root for this reason. -->
+  <link href="/app.css" type="text/css" rel="stylesheet"/>
   <!-- overrides.css: מסך-רחב (720-899px) — צמצום .mobile-vault-chooser-content
        + מיקום .mobile-onboarding-navbar סמוך לתוכן. path מוחלט (לא יחסי) כי
        <base href="/"> קיים למעלה. חייב לבוא **אחרי** app.css (order+specificity
