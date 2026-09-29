@@ -1021,6 +1021,7 @@ const MOBILE_SCRIPTS = [
     installExternalStorageGate();
     installVersionDisplay();
     installNeonSyncButton();
+    installVaultUrlField();
     seedNativeVaultList()
       .catch(function (err) { console.warn('[obsidian-web] seedNativeVaultList failed:', err); })
       .then(function () {
@@ -1154,6 +1155,90 @@ const MOBILE_SCRIPTS = [
     localStorage.setItem('ow-sync:' + id, JSON.stringify({ baseUrl: base, token: token }));
     console.log('[obsidian-web] neon vault created:', id, '->', base);
     navigateToVault(id);
+  }
+
+  // "Enter or claim URL" - the typed value IS the vault id, and we navigate to
+  // /vault/<name>, where showVaultGate() below handles password/claim. Rejects
+  // anything OW_VAULT_NAME_RE forbids, so a name that cannot be a path segment
+  // fails inline instead of 404-ing on the next page. Idempotency guard +
+  // MutationObserver match the other installers here: the onboarding controller
+  // detaches and re-renders screens, so apply() legitimately runs repeatedly.
+  function installVaultUrlField() {
+    function apply() {
+      var screens = document.querySelectorAll('.mobile-vault-chooser-screen, .mobile-onboarding');
+      for (var s = 0; s < screens.length; s++) {
+        var screen = screens[s];
+        if (screen.querySelector('[data-ow-injected="vault-url"]')) continue;
+        var cta = screen.querySelector('button.mod-cta');
+        if (!cta) continue;
+
+        var wrap = document.createElement('div');
+        wrap.setAttribute('data-ow-injected', 'vault-url');
+        wrap.style.cssText = 'display:flex;gap:8px;align-items:center;' +
+          'margin:12px auto 0;max-width:320px;' +
+          'font:13px -apple-system,BlinkMacSystemFont,sans-serif;';
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Enter or claim URL';
+        input.setAttribute('aria-label', 'Vault URL or name');
+        input.autocapitalize = 'off';
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        input.style.cssText = 'flex:1;min-width:0;padding:8px 10px;' +
+          'border:1px solid var(--background-modifier-border,#bbb);border-radius:4px;' +
+          'background:var(--background-primary,#fff);color:var(--text-normal,#000);' +
+          'font:14px -apple-system,BlinkMacSystemFont,sans-serif;';
+
+        var err = document.createElement('span');
+        err.setAttribute('data-ow-injected', 'vault-url-err');
+        err.style.cssText = 'color:var(--text-error,#c0392b);font:12px -apple-system,BlinkMacSystemFont,sans-serif;';
+
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Open';
+        btn.className = cta.className;
+        // Looks come from copying the bundle's CTA class, but
+        // installCreateVaultInterceptor hijacks every button.mod-cta in these
+        // screens - data-ow-injected is what makes it skip this one (§3.6).
+        btn.setAttribute('data-ow-injected', 'vault-url-open');
+        btn.setAttribute('aria-label', 'Open vault');
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          submit();
+        });
+
+        function submit() {
+          // Strip a pasted origin and /vault/ prefix so "myvault" and
+          // "https://host/vault/myvault" both land on /vault/myvault.
+          var raw = (input.value || '').trim();
+          var name = raw.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, '').replace(/^\/+/, '');
+          name = name.replace(/^vault\//i, '').replace(/\/+$/, '');
+          if (name.indexOf('/') !== -1) name = name.split('/')[0];
+          if (!name) { err.textContent = 'Enter a vault name or URL.'; input.focus(); return; }
+          if (!OW_VAULT_NAME_RE.test(name)) {
+            err.textContent = 'Use letters, numbers, dot, dash or underscore (max 64).';
+            input.focus();
+            return;
+          }
+          err.textContent = '';
+          navigateToVault(name);
+        }
+
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        });
+
+        wrap.appendChild(input);
+        wrap.appendChild(btn);
+        wrap.appendChild(err);
+        cta.parentNode.insertBefore(wrap, cta.nextSibling);
+      }
+    }
+    apply();
+    var obs = new MutationObserver(apply);
+    obs.observe(document.body, { childList: true, subtree: true });
   }
 
   // ── Vault name links (/vault/<name>) — password claims ─────────────────────
@@ -1609,7 +1694,15 @@ const MOBILE_SCRIPTS = [
       }
       Promise.resolve(p)
         .then(function (r) {
-          if (!r || r.skipped) {
+          // The runners signal a stuck mutex as {skipped:true, reason:'busy'}
+          // and ONLY that — while on a success summary `skipped` is a COUNT of
+          // unchanged files (run-sync.js: summary.skipped = plan.inSync +
+          // plan.setSynced + plan.forgetSynced + …, e.g. 237 on a real vault).
+          // A bare `r.skipped` truthiness test therefore flagged EVERY
+          // successful sync as busy: the notice replaced the real counts and
+          // the pull's reload below never fired ("Pull does nothing" — the
+          // notes only appeared after a manual refresh).
+          if (!r || r.reason === 'busy' || r.skipped === true) {
             // Only reachable if the runner's mutex is stuck (previous run
             // never finished) — say what to DO instead of "try again".
             notify("The previous sync hasn't finished — if the spinner never stops, reload the page.", 8000);
