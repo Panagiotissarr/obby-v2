@@ -73,9 +73,17 @@ vercel deploy --prod        # uploads public/ + api/, runs no build remotely
 > local-only on purpose: `vendor/` (Obsidian's bundle) is gitignored, so it
 > never exists on Vercel's builder and `npm run build` fails there by design —
 > same rule as the Cloudflare deployment: build the artifact on your machine,
-> ship the artifact. A Git-connected auto-build would need a vendor-download
-> step first and is not supported out of the box. `vercel.json` therefore
-> carries no `buildCommand` either.
+> ship the artifact. `vercel.json` therefore carries no `buildCommand` either.
+>
+> Because of that, **do not connect this repository in Vercel Project Settings →
+> Git** — a Git-connected build would run on Vercel with no `vendor/` and deploy
+> an empty site. Automatic deploys come from `.github/workflows/deploy.yml`
+> instead: it performs the vendor download that Vercel's builder cannot do, then
+> builds and runs `vercel deploy --prod`. It needs three repository secrets
+> (`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`); the IDs are in
+> `src/deployments/vercel/.vercel/project.json`. Vercel does not support OIDC for
+> the deploy step itself, so `VERCEL_TOKEN` is a long-lived token — scope it to
+> this team. The manual flow below keeps working and remains the local path.
 
 Environment variables (Vercel → Project → Settings → Environment Variables):
 

@@ -1,0 +1,185 @@
+# Build the Vercel app and deploy it on every push to main.
+#
+# WHY THIS EXISTS INSTEAD OF VERCEL'S GIT INTEGRATION
+# The build cannot run on Vercel's builders: it needs vendor/obsidian-mobile/
+# (Obsidian's own bundle), which is gitignored and must never be uploaded -
+# see the License section of the root README. So this workflow does the
+# vendor download itself, builds locally on the runner, and ships the finished
+# artifact with `vercel deploy`. The Vercel project's Build Command stays
+# EMPTY; that is required, not incidental.
+#
+# CONSEQUENCE: do NOT connect this repository in Vercel Project Settings > Git.
+# A Git-connected build runs on Vercel with no vendor/ and deploys an empty
+# site. The GitHub connection is here instead.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   VERCEL_TOKEN      - a Vercel access token (Vercel dashboard > Account
+#                       Settings > Tokens, or `vercel tokens add`)
+#   VERCEL_ORG_ID     - team_iiKWrL7uEBNERf5mbTndM5xr
+#   VERCEL_PROJECT_ID - prj_rRkufuAJEMqdfPdBtFquaFEUYZN6
+# Both IDs are in src/deployments/vercel/.vercel/project.json locally.
+# No secret is needed for the BUILD - only to talk to Vercel afterwards.
+# Vercel does not support OIDC for the deploy step itself, so VERCEL_TOKEN is
+# a long-lived token: scope it to this one team and rotate it if it leaks.
+
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Queue rather than cancel: never kill a deploy midway through promoting.
+concurrency:
+  group: vercel-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Vercel project's Node version, so the built functions
+          # and the local build agree.
+          node-version: '24'
+
+      - name: Install the Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Check deploy credentials
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Fail in the first second rather than after a 40 MB download and a
+          # full build, with an error that names the missing secret.
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::VERCEL_TOKEN is not set - add it under Settings > Secrets and variables > Actions" >&2
+            exit 1
+          fi
+          vercel whoami --token "$VERCEL_TOKEN"
+
+      # Read the pin from the generated file rather than hardcoding it here.
+      # The updater defaults to the LATEST release, and 1.13+ does not boot (see
+      # README "Obsidian Version") - so do not inline this value; bump
+      # src/client-mobile/obsidian-version.js instead.
+      - name: Read the pinned Obsidian version
+        id: pin
+        run: |
+          set -euo pipefail
+          version="$(sed -n "s/.*__owObsidianVersion = '\([^']*\)'.*/\1/p" \
+            src/client-mobile/obsidian-version.js)"
+          if [ -z "$version" ]; then
+            echo "::error::could not read __owObsidianVersion from src/client-mobile/obsidian-version.js" >&2
+            exit 1
+          fi
+          echo "Pinned Obsidian version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Both paths are required: the updater skips the ~40 MB download only when
+      # the APK is still in its own cache dir, so caching vendor/ alone re-downloads.
+      - name: Cache the Obsidian bundle
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/obsidian-mobile
+            .tmp/cache/obsidian-releases
+          key: obsidian-mobile-${{ steps.pin.outputs.version }}
+
+      - name: Download the Obsidian mobile bundle
+        run: node scripts/update-obsidian-mobile.js --version "${{ steps.pin.outputs.version }}"
+
+      - name: Verify the bundle is the version we asked for
+        run: |
+          set -euo pipefail
+          pinned="${{ steps.pin.outputs.version }}"
+          # A silently-mismatched bundle is the most likely way to ship a site
+          # that shows the "unsupported version" screen, so prove it here rather
+          # than discovering it in a browser. The updater rewrites
+          # obsidian-version.js with whatever it actually resolved, so a
+          # mismatch means the pin did not hold.
+          if [ ! -s vendor/obsidian-mobile/app.js ]; then
+            echo "::error::vendor/obsidian-mobile/app.js missing after download" >&2
+            exit 1
+          fi
+          resolved="$(sed -n "s/.*__owObsidianVersion = '\([^']*\)'.*/\1/p" \
+            src/client-mobile/obsidian-version.js)"
+          echo "  bundle app.js : $(wc -c < vendor/obsidian-mobile/app.js) bytes"
+          echo "  pinned        : $pinned"
+          echo "  resolved      : $resolved"
+          if [ "$resolved" != "$pinned" ]; then
+            echo "::error::bundle resolved to $resolved, expected $pinned" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        working-directory: src/deployments/vercel
+        run: npm ci
+
+      - name: Test
+        working-directory: src/deployments/vercel
+        # No DATABASE_URL on purpose: the Postgres store is opt-in in the test
+        # suite, so CI never touches the production database.
+        run: npm test
+
+      - name: Build
+        working-directory: src/deployments/vercel
+        run: npm run build
+
+      - name: Verify the artifact before shipping it
+        run: |
+          set -euo pipefail
+          public=src/deployments/vercel/public
+          # The build fails loudly on a missing vendor/ or a missing index.html
+          # marker, so reaching here already means the copies ran. These checks
+          # guard the one thing that would still ship a broken site: an output
+          # directory that is empty or missing the renderer.
+          for required in index.html sw.js obsidian-mobile/app.js system-plugins/manifest.json; do
+            if [ ! -s "$public/$required" ]; then
+              echo "::error::build output missing $public/$required" >&2
+              exit 1
+            fi
+          done
+          files="$(find "$public" -type f | wc -l)"
+          size="$(du -sh "$public" | cut -f1)"
+          echo "  artifact: $files files, $size"
+          if [ "$files" -lt 50 ]; then
+            echo "::error::only $files files in $public - that is not a complete build" >&2
+            exit 1
+          fi
+
+      - name: Deploy to Vercel
+        working-directory: src/deployments/vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        # No `vercel build` and no `--prebuilt`: both would run the build on
+        # Vercel, which cannot work without vendor/. A plain deploy uploads
+        # public/ as-is, which is what this project has always done.
+        run: vercel deploy --prod --yes --token "$VERCEL_TOKEN"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Vercel deploy"
+            echo
+            echo "- commit: \`${{ github.sha }}\`"
+            echo "- Obsidian: \`${{ steps.pin.outputs.version }}\`"
+            echo "- status: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
