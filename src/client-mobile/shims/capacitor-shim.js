@@ -875,13 +875,17 @@
     setScroll: noop,
     setResizeMode: noop,
     getResizeMode: () => Promise.resolve({ mode: 'none' }),
-    // app.js awaits this on android (`Keyboard.hasPhysicalKeyboard()`); an
-    // unimplemented method throws "… is not implemented on android" as an
-    // uncaught promise rejection on every boot. Browser guess: a fine primary
-    // pointer ≈ mouse/keyboard, coarse ≈ touch-only device.
-    hasPhysicalKeyboard: () => Promise.resolve(
-      !!(window.matchMedia && window.matchMedia('(pointer: fine)').matches),
-    ),
+    // app.js awaits this on android (`Keyboard.hasPhysicalKeyboard()`) as
+    // `Bv.hasPhysicalKeyboard().then(e => bn.hasPhysicalKeyboard =
+    // e.hasPhysicalKeyboard)` — the result is read as an OBJECT, so resolve
+    // `{hasPhysicalKeyboard:bool}`, not a bare boolean (a bare `true` would
+    // make `bn.hasPhysicalKeyboard` undefined and silence nothing). A missing
+    // PluginHeaders entry (below) throws "… is not implemented on android"
+    // before this ever runs. Browser guess: a fine primary pointer ≈
+    // mouse/keyboard, coarse ≈ touch-only device.
+    hasPhysicalKeyboard: () => Promise.resolve({
+      hasPhysicalKeyboard: !!(window.matchMedia && window.matchMedia('(pointer: fine)').matches),
+    }),
   };
 
   const KeepAwake = {
@@ -1126,6 +1130,11 @@
           pm('show'), pm('hide'), pm('addListener'),
           pm('removeAllListeners'), pm('setAccessoryBarVisible'),
           pm('setScroll'), pm('setResizeMode'), pm('getResizeMode'),
+          // MUST be declared: Capacitor's registerPlugin Proxy rejects any
+          // method missing from this list with "Keyboard.<m>() is not
+          // implemented on android" before our nativePromise override (and
+          // the Keyboard impl above) is ever reached.
+          pm('hasPhysicalKeyboard'),
         ],
       },
       {
