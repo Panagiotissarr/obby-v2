@@ -72,3 +72,15 @@ site/dist/
 # running migrate/dev locally - never committed).
 src/deployments/vercel/public/
 src/deployments/vercel/.env
+
+# The user's personal vault, uploaded to the sync server from this machine -
+# no vault notes in the repo (AGENTS.md "No personal data in this repo").
+Time-Garden/
+
+# Root env (the `name=password` lines used by scripts/upload helpers).
+# Untracked-but-not-ignored was one `git add .` away from committing a
+# password - ignore it explicitly.
+.env
+
+# Agent session state (OMO run continuation) - tooling scratch, not source.
+.omo/
